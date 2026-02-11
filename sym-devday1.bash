@@ -212,7 +212,11 @@ function validatePolicyResult() {
 
         "None" )
             updateScriptLog "VALIDATE POLICY RESULT: Validation: None; skipping validation"
-            dialogUpdateSetupYourMac "listitem: index: $i, status: success, statustext: Installed"
+            if [[ -z "${libraryItem}" ]]; then
+                dialogUpdateSetupYourMac "listitem: index: $i, status: error, statustext: Skipped"
+            else
+                dialogUpdateSetupYourMac "listitem: index: $i, status: success, statustext: Completed"
+            fi
             ;;
 
         /* )
@@ -275,16 +279,16 @@ fi
 # Pre-flight Check: Verify Kandji MDM is installed
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-if [[ ! -f "/usr/local/bin/kandji" ]]; then
-    echo "ERROR: Kandji MDM is not installed on this device."
-    echo "ERROR: Cannot proceed with Setup Your Mac script."
-    echo "ERROR: Please enroll this device with Kandji before running this script."
-    updateScriptLog "Pre-flight Check: Kandji binary not found at /usr/local/bin/kandji; exiting."
-    exit 1
-else
-    kandjiVersion=$( /usr/local/bin/kandji version 2>/dev/null || echo "unknown" )
-    updateScriptLog "Pre-flight Check: Kandji MDM detected (version: ${kandjiVersion})"
-fi
+# if [[ ! -f "/usr/local/bin/kandji" ]]; then
+#     echo "ERROR: Kandji MDM is not installed on this device."
+#     echo "ERROR: Cannot proceed with Setup Your Mac script."
+#     echo "ERROR: Please enroll this device with Kandji before running this script."
+#     updateScriptLog "Pre-flight Check: Kandji binary not found at /usr/local/bin/kandji; exiting."
+#     exit 1
+# else
+#     kandjiVersion=$( /usr/local/bin/kandji version 2>/dev/null || echo "unknown" )
+#     updateScriptLog "Pre-flight Check: Kandji MDM detected (version: ${kandjiVersion})"
+# fi
 
 
 
@@ -812,6 +816,21 @@ fi
 
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Build list of items for Setup Your Mac dialog
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+policy_array_length=$(get_json_value "${policyJSON}" "steps.length")
+for (( i=0; i<policy_array_length; i++ )); do
+    listitem=$(get_json_value "${policyJSON}" "steps[$i].listitem")
+    icon=$(get_json_value "${policyJSON}" "steps[$i].icon")
+    if [[ -n "$icon" ]]; then
+        dialogSetupYourMacCMD+="--listitem \"${listitem},icon=${setupYourMacPolicyArrayIconPrefixUrl}${icon}\" "
+    else
+        dialogSetupYourMacCMD+="--listitem \"${listitem}\" "
+    fi
+done
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # Display Setup Your Mac dialog (Developer Mode - No Welcome Dialog)
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
@@ -836,8 +855,19 @@ runAsUser osascript -e 'tell application "Dialog" to activate'
 # Output Line Number in `verbose` Debug Mode
 if [[ "${debugMode}" == "verbose" ]]; then updateScriptLog "# # # SETUP YOUR MAC VERBOSE DEBUG MODE: Line No. ${LINENO} # # #" ; fi
 
-    # Initialize SECONDS
-    SECONDS="0"
+# Initialize SECONDS
+SECONDS="0"
+
+# Determine the number of steps in the policyJSON
+policy_array_length=$(get_json_value "${policyJSON}" "steps.length")
+updateScriptLog "SETUP YOUR MAC DIALOG: ${policy_array_length} items to install"
+
+# Set progress increment value based on the number of steps
+progressIncrementValue=$(( 100 / policy_array_length ))
+updateScriptLog "SETUP YOUR MAC DIALOG: Progress increment value: ${progressIncrementValue}"
+
+# Loop through each step in the policyJSON
+for (( i=0; i<policy_array_length; i++ )); do
 
     # Creating initial variables
     listitem=$(get_json_value "${policyJSON}" "steps[$i].listitem")
