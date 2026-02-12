@@ -27,6 +27,11 @@ requiredMinimumBuild="${7:-"disabled"}"                                         
 outdatedOsAction="${8:-"/System/Library/CoreServices/Software Update.app"}"     # Parameter 8: Outdated OS Action [ /System/Library/CoreServices/Software Update.app (default) | kandji://library ] (i.e., Kandji Self Service library for operating system upgrades)
 symConfiguration="${9:-"Complete"}"                                             # Parameter 9: Default Configuration [ Complete (default) | Required | Recommended ]
 # Completion action is hardcoded to Restart for developer setup
+handoffMode="${SYM_HANDOFF:-0}"
+logToStdout="true"
+if [[ "${SYM_NO_STDOUT:-0}" == "1" ]]; then
+    logToStdout="false"
+fi
 
 
 
@@ -58,13 +63,106 @@ if [[ ! -f "${scriptLog}" ]]; then
 fi
 
 
-
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # Pre-flight Check: Client-side Script Logging Function
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 function updateScriptLog() {
-    echo -e "$( date +%Y-%m-%d\ %H:%M:%S ) - ${1}" | tee -a "${scriptLog}"
+    if [[ "${logToStdout}" == "true" ]]; then
+        echo -e "$( date +%Y-%m-%d\ %H:%M:%S ) - ${1}" | tee -a "${scriptLog}"
+    else
+        echo -e "$( date +%Y-%m-%d\ %H:%M:%S ) - ${1}" >> "${scriptLog}"
+    fi
+}
+
+
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Detect Kandji execution context
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+function isKandjiContext() {
+    local parentProcess
+    local grandParentPid
+    local grandParentProcess
+
+    parentProcess=$( ps -p "$PPID" -o comm= | sed 's/^ *//g' )
+    grandParentPid=$( ps -p "$PPID" -o ppid= | tr -d ' ' )
+    grandParentProcess=$( ps -p "$grandParentPid" -o comm= | sed 's/^ *//g' )
+
+    if [[ "$parentProcess" == *"Kandji Self Service"* ]] || [[ "$parentProcess" == *"kandji-agent"* ]] || \
+       [[ "$grandParentProcess" == *"Kandji Self Service"* ]] || [[ "$grandParentProcess" == *"kandji-agent"* ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Handoff to launchd (detached run)
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+function xmlEscape() {
+    echo "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
+}
+
+function handoffToLaunchd() {
+    local scriptPath
+    local plistPath
+    local label
+    local argsPlist=""
+
+    scriptPath="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    plistPath="/Library/LaunchDaemons/org.nm.devday1.handoff.plist"
+    label="org.nm.devday1.handoff"
+
+    cleanupHandoffLaunchd
+
+    for arg in "$@"; do
+        argsPlist+="        <string>$(xmlEscape "$arg")</string>\n"
+    done
+
+    cat > "${plistPath}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${label}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>${scriptPath}</string>
+${argsPlist}    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>SYM_HANDOFF</key>
+        <string>1</string>
+        <key>SYM_NO_STDOUT</key>
+        <string>1</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+EOF
+
+    chown root:wheel "${plistPath}"
+    chmod 644 "${plistPath}"
+
+    /bin/launchctl bootstrap system "${plistPath}"
+    /bin/launchctl kickstart -k "system/${label}"
+}
+
+function cleanupHandoffLaunchd() {
+    local plistPath="/Library/LaunchDaemons/org.nm.devday1.handoff.plist"
+
+    if [[ -e "${plistPath}" ]]; then
+        /bin/launchctl bootout system "${plistPath}" 2>/dev/null
+        rm -f "${plistPath}"
+    fi
 }
 
 
@@ -109,6 +207,49 @@ function dialogUpdateSetupYourMac() {
 
 function dialogUpdateWelcome() {
     echo "$1" >> "$welcomeCommandFile"
+}
+
+
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Get Internet Speed (Simple Test)
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+function getInternetSpeed() {
+    # Test URL (10MB file from a fast CDN)
+    testURL="http://speedtest.ftp.otenet.gr/files/test10Mb.db"
+    
+    # Download and measure speed
+    downloadSpeed=$(curl -o /dev/null -w '%{speed_download}' -s --max-time 5 "$testURL" 2>/dev/null)
+    
+    if [[ -n "$downloadSpeed" ]] && [[ "$downloadSpeed" != "0.000" ]]; then
+        # Convert bytes/sec to Mbps
+        downloadMbps=$(echo "scale=1; $downloadSpeed / 131072" | bc 2>/dev/null || echo "0")
+        echo "${downloadMbps} Mbps"
+    else
+        echo "N/A"
+    fi
+}
+
+
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Build System Information for Infobox
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+function buildSystemInfo() {
+    # Get internet speed (runs in background to avoid blocking)
+    local internetSpeed=$(getInternetSpeed)
+    
+    # Build the infobox content
+    local systemInfo="**System Information**  \n\n"
+    systemInfo+="**Serial Number:** ${serialNumber}  \n"
+    systemInfo+="**User Name:** ${loggedInUserFullname}  \n"
+    systemInfo+="**User ID:** ${loggedInUser}  \n"
+    systemInfo+="**macOS:** ${macOSproductVersion} (${macOSbuildVersion})  \n"
+    systemInfo+="**Download Speed:** ${internetSpeed}  \n"
+    
+    echo "$systemInfo"
 }
 
 
@@ -260,7 +401,7 @@ function validatePolicyResult() {
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 updateScriptLog "\n\n###\n# Setup Your Mac (${scriptVersion})\n# By: Abdul Aziz & Temo Zamduio\n###\n"
-updateScriptLog "Pre-flight Check: Initiating …"
+updateScriptLog "Pre-flight Check: Initiating..."
 
 
 
@@ -271,6 +412,14 @@ updateScriptLog "Pre-flight Check: Initiating …"
 if [[ $(id -u) -ne 0 ]]; then
     updateScriptLog "Pre-flight Check: This script must be run as root; exiting."
     exit 1
+fi
+
+# Pre-flight Check: Handoff when running via Kandji Self Service
+if [[ "${handoffMode}" != "1" ]] && isKandjiContext; then
+    logToStdout="false"
+    updateScriptLog "Pre-flight Check: Kandji context detected; handing off to launchd"
+    handoffToLaunchd "$@"
+    exit 0
 fi
 
 
@@ -553,6 +702,10 @@ dialogBinary="/usr/local/bin/dialog"
 welcomeCommandFile=$( mktemp /var/tmp/dialogWelcome.XXX )
 setupYourMacCommandFile=$( mktemp /var/tmp/dialogSetupYourMac.XXX )
 kandjiBinary="/usr/local/bin/kandji"
+forceQuitFlag="/var/tmp/sym-forcequit"
+
+# Clear any previous force-quit flag
+rm -f "${forceQuitFlag}"
 
 # Set proper permissions on command files so logged-in user can read them
 chmod 644 "${welcomeCommandFile}"
@@ -603,6 +756,8 @@ dialogSetupYourMacCMD="$dialogBinary \
 --progresstext \"Initializing configuration …\" \
 --button1text \"Wait\" \
 --button1disabled \
+--button2text \"Force Quit\" \
+--button2action \"touch ${forceQuitFlag}\" \
 --infotext \"$scriptVersion\" \
 --titlefont 'shadow=true, size=40' \
 --messagefont 'size=14' \
@@ -748,6 +903,19 @@ function quitScript() {
         rm "${setupYourMacCommandFile}"
     fi
 
+    # Remove force-quit flag
+    if [[ -e ${forceQuitFlag} ]]; then
+        updateScriptLog "QUIT SCRIPT: Removing ${forceQuitFlag} …"
+        rm "${forceQuitFlag}"
+    fi
+
+    # Remove handoff launchd plist
+    if [[ -e /Library/LaunchDaemons/org.nm.devday1.handoff.plist ]]; then
+        updateScriptLog "QUIT SCRIPT: Removing handoff launchd plist …"
+        /bin/launchctl bootout system /Library/LaunchDaemons/org.nm.devday1.handoff.plist 2>/dev/null
+        rm /Library/LaunchDaemons/org.nm.devday1.handoff.plist
+    fi
+
     # Remove any default dialog file
     if [[ -e /var/tmp/dialog.log ]]; then
         updateScriptLog "QUIT SCRIPT: Removing default dialog file …"
@@ -845,6 +1013,33 @@ until pgrep -q -x "Dialog"; do
 done
 updateScriptLog "DEVELOPER MODE: 'Setup Your Mac' dialog displayed; ensure it's the front-most app"
 runAsUser osascript -e 'tell application "Dialog" to activate'
+
+# Quit script if user presses quitkey (k) in Dialog
+(
+    wait "$dialogSetupYourMacProcessID"
+    dialogReturnCode=$?
+    if [[ "$dialogReturnCode" == "2" ]]; then
+        updateScriptLog "QUITKEY: User pressed 'k' to quit; exiting script"
+        welcomeReturnCode="2"
+        quitScript
+    fi
+) &
+
+# Force-quit watcher (button2)
+(
+    while [[ ! -f "${forceQuitFlag}" ]]; do
+        sleep 0.5
+    done
+    updateScriptLog "FORCE QUIT: User pressed Force Quit; exiting script"
+    welcomeReturnCode="2"
+    quitScript
+) &
+
+# Update infobox with system information
+updateScriptLog "DEVELOPER MODE: Fetching system information for infobox..."
+systemInfoBox=$(buildSystemInfo)
+updateScriptLog "DEVELOPER MODE: Updating infobox display..."
+dialogUpdateSetupYourMac "infobox: ${systemInfoBox}"
 
 
 
