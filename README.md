@@ -46,6 +46,48 @@ This document tracks all changes made to streamline the script for Kandji deploy
 
 ## ✅ COMPLETED CHANGES
 
+### **🧪 2026-02-12: Added Test-Phase Exit Controls (Force Quit + Quit Key)**
+**Type:** UX Safety / Testing Convenience
+
+**What Was Added:**
+1. **Force Quit Button**
+   - A temporary **Force Quit** button was added to the Setup Your Mac dialog.
+   - Pressing the button now exits the dialog **and** terminates the script safely.
+
+2. **Quit Key (k)**
+   - The dialog now listens for the `k` key.
+   - Pressing `k` exits the dialog **and** terminates the script safely.
+
+**✅ Result:**
+- ✔️ Testers can quickly exit without waiting for installs to finish
+- ✔️ Script cleans up temp files and exits cleanly
+- ✔️ Designed for testing only; can be removed for production
+
+---
+
+### **🔁 2026-02-12: Added Kandji Handoff Strategy (launchd Detach)**
+**Type:** Execution Reliability / Kandji Agent Compatibility
+
+**Problem:**
+When the script is launched from **Kandji Self Service**, the Kandji agent is already busy running the script. Nested `kandji library --item ... -F` calls can hang or stall indefinitely because the agent cannot re-enter while it is already active.
+
+**Strategy Implemented:**
+- Detects Kandji Self Service / kandji-agent execution context.
+- Performs a **handoff** to a detached `launchd` job.
+- The original Self Service run exits immediately, freeing the Kandji agent.
+- The detached job continues the full workflow (dialog + progress + installs).
+- Console output is suppressed in the handoff run, so logs only write to `/var/log/org.nm.devday1.log`.
+
+**Why this matters:**
+- ✅ Prevents agent lockups and long-running hangs
+- ✅ Allows other Kandji library items to run normally
+- ✅ Preserves real-time progress UI for the user
+- ✅ Keeps logs clean and centralized
+
+**Cleanup:**
+- The launchd plist (`/Library/LaunchDaemons/org.nm.devday1.handoff.plist`) is removed upon normal script completion.
+- A pre-clean step removes any stale plist before creating a new handoff job.
+
 ### **🔄 2026-02-10: Simplified Completion Action to Restart-Only**
 **Original Lines:** ~1125-1170, ~1640-1750
 **Lines Removed:** ~150 lines
