@@ -28,7 +28,8 @@ outdatedOsAction="${8:-"/System/Library/CoreServices/Software Update.app"}"     
 symConfiguration="${9:-"Complete"}"                                             # Parameter 9: Default Configuration [ Complete (default) | Required | Recommended ]
 # Completion action is hardcoded to Restart for developer setup
 handoffDaemonName="org.nm.devday1.handoff"
-handoffScriptPath="/Library/Application Support/org.nm/Scripts/sym-devday1-handoff.sh"
+handoffScriptPath="/Library/Application Support/org.nm/Scripts/sym-devday1.bash"
+handoffWrapperPath="/Library/Application Support/org.nm/Scripts/sym-devday1-handoff.sh"
 handoffPlistPath="/Library/LaunchDaemons/${handoffDaemonName}.plist"
 handoffLog="/var/log/org.nm.devday1.handoff.log"
 
@@ -72,9 +73,9 @@ function updateScriptLog() {
 
 
 
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# Kandji context detection + handoff (AfterLiftOff-style)
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+# Kandji context detection + LaunchDaemon handoff (delay to let Self Service exit)
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 function isKandjiContext() {
     local parentProcess
@@ -101,24 +102,30 @@ function handoffToLaunchd() {
 
     /bin/mkdir -p "$(dirname "${handoffScriptPath}")"
 
+    /bin/cp -p "${mainScriptPath}" "${handoffScriptPath}"
+    /usr/sbin/chown root:wheel "${handoffScriptPath}"
+    /bin/chmod 755 "${handoffScriptPath}"
+
     for arg in "$@"; do
         argsQuoted+=" $(printf '%q' "$arg")"
     done
 
-    cat > "${handoffScriptPath}" <<EOF
+    cat > "${handoffWrapperPath}" <<EOF
 #!/bin/bash
 
 LOGFILE="${handoffLog}"
 PLIST_PATH="${handoffPlistPath}"
-SCRIPT_PATH="${handoffScriptPath}"
-MAIN_SCRIPT="${mainScriptPath}"
+SCRIPT_PATH="${handoffWrapperPath}"
+FULL_SCRIPT_PATH="${handoffScriptPath}"
 
 exec &> >(tee -a "\$LOGFILE")
 echo "\$(date): Handoff started"
 
 export SYM_HANDOFF=1
 
-"${MAIN_SCRIPT}"${argsQuoted}
+sleep 15
+
+"\$FULL_SCRIPT_PATH"${argsQuoted}
 exitCode=\$?
 
 echo "\$(date): Handoff complete with exit code \${exitCode}"
@@ -129,12 +136,13 @@ if [[ -f "\$PLIST_PATH" ]]; then
 fi
 
 [[ -f "\$SCRIPT_PATH" ]] && /bin/rm -f "\$SCRIPT_PATH"
+[[ -f "\$FULL_SCRIPT_PATH" ]] && /bin/rm -f "\$FULL_SCRIPT_PATH"
 
 exit "\${exitCode}"
 EOF
 
-    /usr/sbin/chown root:wheel "${handoffScriptPath}"
-    /bin/chmod 755 "${handoffScriptPath}"
+    /usr/sbin/chown root:wheel "${handoffWrapperPath}"
+    /bin/chmod 755 "${handoffWrapperPath}"
 
     cat > "${handoffPlistPath}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -146,7 +154,7 @@ EOF
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>${handoffScriptPath}</string>
+        <string>${handoffWrapperPath}</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
@@ -159,8 +167,6 @@ EOF
 
     /bin/launchctl bootstrap system "${handoffPlistPath}"
 }
-
-
 
 
 
@@ -423,16 +429,16 @@ fi
 # Pre-flight Check: Verify Kandji MDM is installed
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-# if [[ ! -f "/usr/local/bin/kandji" ]]; then
-#     echo "ERROR: Kandji MDM is not installed on this device."
-#     echo "ERROR: Cannot proceed with Setup Your Mac script."
-#     echo "ERROR: Please enroll this device with Kandji before running this script."
-#     updateScriptLog "Pre-flight Check: Kandji binary not found at /usr/local/bin/kandji; exiting."
-#     exit 1
-# else
-#     kandjiVersion=$( /usr/local/bin/kandji version 2>/dev/null || echo "unknown" )
-#     updateScriptLog "Pre-flight Check: Kandji MDM detected (version: ${kandjiVersion})"
-# fi
+if [[ ! -f "/usr/local/bin/kandji" ]]; then
+    echo "ERROR: Kandji MDM is not installed on this device."
+    echo "ERROR: Cannot proceed with Setup Your Mac script."
+    echo "ERROR: Please enroll this device with Kandji before running this script."
+    updateScriptLog "Pre-flight Check: Kandji binary not found at /usr/local/bin/kandji; exiting."
+    exit 1
+else
+    kandjiVersion=$( /usr/local/bin/kandji version 2>/dev/null || echo "unknown" )
+    updateScriptLog "Pre-flight Check: Kandji MDM detected (version: ${kandjiVersion})"
+fi
 
 
 
@@ -758,12 +764,12 @@ dialogSetupYourMacCMD="$dialogBinary \
 --messagefont 'size=14' \
 --height '780' \
 --position 'centre' \
---blurscreen \
 --ontop \
 --overlayicon \"$overlayicon\" \
 --quitkey k \
 --commandfile \"$setupYourMacCommandFile\" "
 
+# Line 767: --blurscreen \
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # shellcheck disable=SC1112 # use literal slanted single quotes for typographic reasons
