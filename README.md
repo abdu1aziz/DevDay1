@@ -88,6 +88,37 @@ When the script is launched from **Kandji Self Service**, the Kandji agent is al
 - The launchd plist (`/Library/LaunchDaemons/org.nm.devday1.handoff.plist`) is removed upon normal script completion.
 - A pre-clean step removes any stale plist before creating a new handoff job.
 
+---
+
+### **🧩 2026-02-13: Kandji Agent Roadblock + Handoff Fix (Detailed)**
+**Problem Observed:**
+- The script was launched from **Kandji Self Service**.
+- Inside the script, we call `kandji library --item <id> -F` to install items.
+- The Kandji agent is **already busy running the Self Service script**, so the nested `kandji library` call can hang indefinitely.
+- Result: the SYM workflow stalls for long periods (e.g., >1 hour) with no progress.
+
+**Why this happens:**
+- Kandji uses a single agent process to execute scripts and library installs.
+- When the agent is already executing a script, it cannot reliably re-enter to run a nested library install.
+- This creates a blocking condition that looks like a “stuck” install.
+
+**Fix Applied (AfterLiftOff-style Handoff):**
+1. **Detect Kandji Self Service context** at startup.
+2. **Immediately detach** by creating:
+   - A dedicated handoff script (runs SYM in the background)
+   - A LaunchDaemon that invokes that script
+3. **Exit the original Kandji run**, freeing the agent.
+4. The handoff script runs the full SYM workflow (dialog + progress + installs) without blocking Kandji.
+
+**Why this approach is safe:**
+- It preserves all existing SYM logic.
+- It keeps the progress UI visible to the user.
+- It avoids Kandji agent re-entrancy issues entirely.
+
+**Cleanup Behavior:**
+- The handoff script removes its LaunchDaemon plist and itself on completion.
+- This prevents orphaned plists and ensures repeatability on future runs.
+
 ### **🔄 2026-02-10: Simplified Completion Action to Restart-Only**
 **Original Lines:** ~1125-1170, ~1640-1750
 **Lines Removed:** ~150 lines
