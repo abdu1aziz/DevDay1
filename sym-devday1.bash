@@ -27,11 +27,6 @@ requiredMinimumBuild="${7:-"disabled"}"                                         
 outdatedOsAction="${8:-"/System/Library/CoreServices/Software Update.app"}"     # Parameter 8: Outdated OS Action [ /System/Library/CoreServices/Software Update.app (default) | kandji://library ] (i.e., Kandji Self Service library for operating system upgrades)
 symConfiguration="${9:-"Complete"}"                                             # Parameter 9: Default Configuration [ Complete (default) | Required | Recommended ]
 # Completion action is hardcoded to Restart for developer setup
-handoffDaemonName="org.nm.devday1.handoff"
-handoffScriptPath="/Library/Application Support/org.nm/Scripts/sym-devday1.bash"
-handoffWrapperPath="/Library/Application Support/org.nm/Scripts/sym-devday1-handoff.sh"
-handoffPlistPath="/Library/LaunchDaemons/${handoffDaemonName}.plist"
-handoffLog="/var/log/org.nm.devday1.handoff.log"
 
 
 
@@ -69,103 +64,6 @@ fi
 
 function updateScriptLog() {
     echo -e "$( date +%Y-%m-%d\ %H:%M:%S ) - ${1}" | tee -a "${scriptLog}"
-}
-
-
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# Kandji context detection + LaunchDaemon handoff (delay to let Self Service exit)
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-
-function isKandjiContext() {
-    local parentProcess
-    local grandParentPid
-    local grandParentProcess
-
-    parentProcess=$( ps -p "$PPID" -o comm= | sed 's/^ *//g' )
-    grandParentPid=$( ps -p "$PPID" -o ppid= | tr -d ' ' )
-    grandParentProcess=$( ps -p "$grandParentPid" -o comm= | sed 's/^ *//g' )
-
-    if [[ "$parentProcess" == *"Kandji Self Service"* ]] || [[ "$parentProcess" == *"kandji-agent"* ]] || \
-       [[ "$grandParentProcess" == *"Kandji Self Service"* ]] || [[ "$grandParentProcess" == *"kandji-agent"* ]]; then
-        return 0
-    fi
-
-    return 1
-}
-
-function handoffToLaunchd() {
-    local mainScriptPath
-    local argsQuoted=""
-
-    mainScriptPath="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-
-    /bin/mkdir -p "$(dirname "${handoffScriptPath}")"
-
-    /bin/cp -p "${mainScriptPath}" "${handoffScriptPath}"
-    /usr/sbin/chown root:wheel "${handoffScriptPath}"
-    /bin/chmod 755 "${handoffScriptPath}"
-
-    for arg in "$@"; do
-        argsQuoted+=" $(printf '%q' "$arg")"
-    done
-
-    cat > "${handoffWrapperPath}" <<EOF
-#!/bin/bash
-
-LOGFILE="${handoffLog}"
-PLIST_PATH="${handoffPlistPath}"
-SCRIPT_PATH="${handoffWrapperPath}"
-FULL_SCRIPT_PATH="${handoffScriptPath}"
-
-exec &> >(tee -a "\$LOGFILE")
-echo "\$(date): Handoff started"
-
-export SYM_HANDOFF=1
-
-sleep 15
-
-"\$FULL_SCRIPT_PATH"${argsQuoted}
-exitCode=\$?
-
-echo "\$(date): Handoff complete with exit code \${exitCode}"
-
-if [[ -f "\$PLIST_PATH" ]]; then
-    /bin/launchctl bootout system "\$PLIST_PATH" 2>/dev/null
-    /bin/rm -f "\$PLIST_PATH"
-fi
-
-[[ -f "\$SCRIPT_PATH" ]] && /bin/rm -f "\$SCRIPT_PATH"
-[[ -f "\$FULL_SCRIPT_PATH" ]] && /bin/rm -f "\$FULL_SCRIPT_PATH"
-
-exit "\${exitCode}"
-EOF
-
-    /usr/sbin/chown root:wheel "${handoffWrapperPath}"
-    /bin/chmod 755 "${handoffWrapperPath}"
-
-    cat > "${handoffPlistPath}" <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>${handoffDaemonName}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/bash</string>
-        <string>${handoffWrapperPath}</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
-EOF
-
-    /usr/sbin/chown root:wheel "${handoffPlistPath}"
-    /bin/chmod 644 "${handoffPlistPath}"
-
-    /bin/launchctl bootstrap system "${handoffPlistPath}"
 }
 
 
@@ -414,13 +312,6 @@ updateScriptLog "Pre-flight Check: Initiating..."
 if [[ $(id -u) -ne 0 ]]; then
     updateScriptLog "Pre-flight Check: This script must be run as root; exiting."
     exit 1
-fi
-
-# Pre-flight Check: Handoff when running via Kandji Self Service
-if [[ -z "${SYM_HANDOFF}" ]] && isKandjiContext; then
-    updateScriptLog "Pre-flight Check: Kandji context detected; handing off to launchd"
-    handoffToLaunchd "$@"
-    exit 0
 fi
 
 
