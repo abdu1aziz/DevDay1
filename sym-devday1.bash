@@ -27,11 +27,10 @@ requiredMinimumBuild="${7:-"disabled"}"                                         
 outdatedOsAction="${8:-"/System/Library/CoreServices/Software Update.app"}"     # Parameter 8: Outdated OS Action [ /System/Library/CoreServices/Software Update.app (default) | kandji://library ] (i.e., Kandji Self Service library for operating system upgrades)
 symConfiguration="${9:-"Complete"}"                                             # Parameter 9: Default Configuration [ Complete (default) | Required | Recommended ]
 # Completion action is hardcoded to Restart for developer setup
-handoffMode="${SYM_HANDOFF:-0}"
-logToStdout="true"
-if [[ "${SYM_NO_STDOUT:-0}" == "1" ]]; then
-    logToStdout="false"
-fi
+handoffDaemonName="org.nm.devday1.handoff"
+handoffScriptPath="/Library/Application Support/org.nm/Scripts/sym-devday1-handoff.sh"
+handoffPlistPath="/Library/LaunchDaemons/${handoffDaemonName}.plist"
+handoffLog="/var/log/org.nm.devday1.handoff.log"
 
 
 
@@ -68,17 +67,13 @@ fi
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 function updateScriptLog() {
-    if [[ "${logToStdout}" == "true" ]]; then
-        echo -e "$( date +%Y-%m-%d\ %H:%M:%S ) - ${1}" | tee -a "${scriptLog}"
-    else
-        echo -e "$( date +%Y-%m-%d\ %H:%M:%S ) - ${1}" >> "${scriptLog}"
-    fi
+    echo -e "$( date +%Y-%m-%d\ %H:%M:%S ) - ${1}" | tee -a "${scriptLog}"
 }
 
 
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# Detect Kandji execution context
+# Kandji context detection + handoff (AfterLiftOff-style)
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 function isKandjiContext() {
@@ -98,72 +93,75 @@ function isKandjiContext() {
     return 1
 }
 
-
-
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# Handoff to launchd (detached run)
-# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-
-function xmlEscape() {
-    echo "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'
-}
-
 function handoffToLaunchd() {
-    local scriptPath
-    local plistPath
-    local label
-    local argsPlist=""
+    local mainScriptPath
+    local argsQuoted=""
 
-    scriptPath="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
-    plistPath="/Library/LaunchDaemons/org.nm.devday1.handoff.plist"
-    label="org.nm.devday1.handoff"
+    mainScriptPath="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
-    cleanupHandoffLaunchd
+    /bin/mkdir -p "$(dirname "${handoffScriptPath}")"
 
     for arg in "$@"; do
-        argsPlist+="        <string>$(xmlEscape "$arg")</string>\n"
+        argsQuoted+=" $(printf '%q' "$arg")"
     done
 
-    cat > "${plistPath}" <<EOF
+    cat > "${handoffScriptPath}" <<EOF
+#!/bin/bash
+
+LOGFILE="${handoffLog}"
+PLIST_PATH="${handoffPlistPath}"
+SCRIPT_PATH="${handoffScriptPath}"
+MAIN_SCRIPT="${mainScriptPath}"
+
+exec &> >(tee -a "\$LOGFILE")
+echo "\$(date): Handoff started"
+
+export SYM_HANDOFF=1
+
+"${MAIN_SCRIPT}"${argsQuoted}
+exitCode=\$?
+
+echo "\$(date): Handoff complete with exit code \${exitCode}"
+
+if [[ -f "\$PLIST_PATH" ]]; then
+    /bin/launchctl bootout system "\$PLIST_PATH" 2>/dev/null
+    /bin/rm -f "\$PLIST_PATH"
+fi
+
+[[ -f "\$SCRIPT_PATH" ]] && /bin/rm -f "\$SCRIPT_PATH"
+
+exit "\${exitCode}"
+EOF
+
+    /usr/sbin/chown root:wheel "${handoffScriptPath}"
+    /bin/chmod 755 "${handoffScriptPath}"
+
+    cat > "${handoffPlistPath}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>${label}</string>
+    <string>${handoffDaemonName}</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>${scriptPath}</string>
-${argsPlist}    </array>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>SYM_HANDOFF</key>
-        <string>1</string>
-        <key>SYM_NO_STDOUT</key>
-        <string>1</string>
-    </dict>
+        <string>${handoffScriptPath}</string>
+    </array>
     <key>RunAtLoad</key>
     <true/>
 </dict>
 </plist>
 EOF
 
-    chown root:wheel "${plistPath}"
-    chmod 644 "${plistPath}"
+    /usr/sbin/chown root:wheel "${handoffPlistPath}"
+    /bin/chmod 644 "${handoffPlistPath}"
 
-    /bin/launchctl bootstrap system "${plistPath}"
-    /bin/launchctl kickstart -k "system/${label}"
+    /bin/launchctl bootstrap system "${handoffPlistPath}"
 }
 
-function cleanupHandoffLaunchd() {
-    local plistPath="/Library/LaunchDaemons/org.nm.devday1.handoff.plist"
 
-    if [[ -e "${plistPath}" ]]; then
-        /bin/launchctl bootout system "${plistPath}" 2>/dev/null
-        rm -f "${plistPath}"
-    fi
-}
+
 
 
 
@@ -176,8 +174,6 @@ function runAsUser() {
         launchctl asuser "$loggedInUserID" sudo -u "$loggedInUser" "$@"
     fi
 }
-
-
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 # Parse JSON with awk (thanks, @thisisadamj!)
@@ -415,8 +411,7 @@ if [[ $(id -u) -ne 0 ]]; then
 fi
 
 # Pre-flight Check: Handoff when running via Kandji Self Service
-if [[ "${handoffMode}" != "1" ]] && isKandjiContext; then
-    logToStdout="false"
+if [[ -z "${SYM_HANDOFF}" ]] && isKandjiContext; then
     updateScriptLog "Pre-flight Check: Kandji context detected; handing off to launchd"
     handoffToLaunchd "$@"
     exit 0
@@ -907,13 +902,6 @@ function quitScript() {
     if [[ -e ${forceQuitFlag} ]]; then
         updateScriptLog "QUIT SCRIPT: Removing ${forceQuitFlag} …"
         rm "${forceQuitFlag}"
-    fi
-
-    # Remove handoff launchd plist
-    if [[ -e /Library/LaunchDaemons/org.nm.devday1.handoff.plist ]]; then
-        updateScriptLog "QUIT SCRIPT: Removing handoff launchd plist …"
-        /bin/launchctl bootout system /Library/LaunchDaemons/org.nm.devday1.handoff.plist 2>/dev/null
-        rm /Library/LaunchDaemons/org.nm.devday1.handoff.plist
     fi
 
     # Remove any default dialog file
