@@ -36,7 +36,7 @@ Unlike traditional MDM-driven installations that provide minimal user feedback, 
 ## 📝 Overview
 This document tracks all changes made to streamline the script for Kandji deployment with static library items.
 
-**📊 Current Script Status:** 909 lines (reduced from 2090 original lines = 56.5% reduction)
+**📊 Current Script Status:** 997 lines (reduced from 2090 original lines = 56.5% reduction)
 
 **📦 Original Source:** Based on the Setup Your Mac framework for Jamf Pro, adapted and optimized for Kandji MDM with developer-focused workflow enhancements.
 
@@ -45,6 +45,41 @@ This document tracks all changes made to streamline the script for Kandji deploy
 ---
 
 ## ✅ COMPLETED CHANGES
+
+### **🛑 2026-02-14: Fixed Kandji Library Installs Hanging (Agent Bootout Removed)**
+**Type:** Reliability / Kandji Workflow Integrity
+
+**Problem Observed:**
+- Kandji library installs (`kandji library --item ... -F`) intermittently hung or stalled indefinitely.
+- This occurred during the main install loop, especially for Self Service library items.
+
+**Root Cause (Culprit):**
+- The script **booted out the Kandji agent LaunchDaemon** early in pre-flight checks:
+   - `kandjilaunchDaemon="/Library/LaunchDaemons/io.kandji.kandji-agent.plist"`
+   - `/bin/launchctl bootout system "$kandjilaunchDaemon"`
+- That action **stops the Kandji agent**, which is **required** to execute Self Service library installs.
+- Result: the CLI call waited on the agent’s background services, which were no longer running.
+
+**Why This Breaks Installs:**
+- `kandji library --item` is a front-end request that relies on the Kandji agent to:
+   - fetch metadata,
+   - start the download/install workflow,
+   - manage status and post-install tasks.
+- Booting out the agent removes the executor, so the workflow deadlocks.
+
+**Fix Implemented:**
+- **Removed the LaunchDaemon bootout step.**
+- The pre-flight check now explicitly **keeps the Kandji agent enabled** for the duration of the script.
+
+**Why This Is the Correct Fix:**
+- Kandji library installs are **agent-driven**; disabling the agent while invoking them is self-defeating.
+- Keeping the agent alive preserves expected Kandji behavior with no extra workarounds.
+- This aligns with Kandji’s intended execution model for Self Service and on-demand installs.
+
+**Net Result:**
+- ✅ Library installs complete reliably.
+- ✅ No hangs during the install loop.
+- ✅ Eliminates the root cause rather than masking symptoms.
 
 ### **🧪 2026-02-12: Added Test-Phase Exit Controls (Force Quit + Quit Key)**
 **Type:** UX Safety / Testing Convenience
@@ -66,9 +101,9 @@ This document tracks all changes made to streamline the script for Kandji deploy
 ---
 
 ### **🔄 2026-02-10: Simplified Completion Action to Restart-Only**
-**Original Lines:** ~1125-1170, ~1640-1750
+**Original Lines:** N/A (legacy script)
 **Lines Removed:** ~150 lines
-**Current Location:** Lines 825-886 (completionAction function)
+**Current Location:** Lines 730-749 (completionAction function)
 
 **What Was Removed:**
 1. **Completion Action Case Statement**
@@ -112,13 +147,13 @@ This document tracks all changes made to streamline the script for Kandji deploy
 **Type:** Terminology Updates
 
 **Current Key References:**
-1. **Line 20:** "Kandji Script Parameters" (was "Jamf Pro Script Parameters")
-2. **Line 283-295:** Kandji MDM pre-flight check
-3. **Line 396:** Kandji launch daemon: io.kandji.kandji-agent.plist
-4. **Line 534:** Kandji binary variable: `kandjiBinary="/usr/local/bin/kandji"`
-5. **Line 154:** confirmPolicyExecution function (triggers Kandji library items)
-6. **Line 197:** validatePolicyResult function
-7. **Line 762-797:** policyJSONConfiguration function
+1. **Line 18:** "Kandji Script Parameters" (was "Jamf Pro Script Parameters")
+2. **Line 320-332:** Kandji MDM pre-flight check
+3. **Line 433-437:** Kandji agent pre-flight note (agent remains enabled)
+4. **Line 586:** Kandji binary variable: `kandjiBinary="/usr/local/bin/kandji"`
+5. **Line 195:** confirmPolicyExecution function (triggers Kandji library items)
+6. **Line 238:** validatePolicyResult function
+7. **Line 669-702:** policyJSONConfiguration function
 
 **Variable Names Renamed:**
 - `jamfBinary` → `kandjiBinary`
@@ -145,13 +180,13 @@ This document tracks all changes made to streamline the script for Kandji deploy
 **Total Updates:** ~30+ references across comments, variables, and messages
 
 ### **🗑️ 2026-02-11: Removed Unused failureCommandFile Variable**
-**Lines Removed:** ~14 lines (533, 537, 676-682, 807-810)
+**Lines Removed:** N/A (no longer present in current script)
 **Type:** Dead Code Removal
 
 **What Was Removed:**
 1. **Variable Declaration:** `failureCommandFile=$( mktemp /var/tmp/dialogFailure.XXX )`
 2. **Permission Setting:** `chmod 644 "${failureCommandFile}"`
-3. **Misleading Comment Section:** Lines referring to "Failure dialog" function that doesn't exist (7 lines)
+3. **Misleading Comment Section:** N/A (no longer present in current script)
 4. **Cleanup Block:** Removal of failureCommandFile in quitScript() (4 lines)
 
 **❓ Reason:**
@@ -169,7 +204,7 @@ This document tracks all changes made to streamline the script for Kandji deploy
 ---
 
 ### **🧹 2026-02-11: Removed All Welcome Dialog Code**
-**Lines Removed:** ~272 lines total
+**Lines Removed:** N/A (no longer present in current script)
 **Type:** Major Cleanup
 
 **What Was Removed:**
@@ -203,7 +238,7 @@ This document tracks all changes made to streamline the script for Kandji deploy
 ---
 
 ### **🔗 2026-02-11: Removed snelson.us/sym URL Reference**
-**Line Affected:** 258
+**Line Affected:** N/A (no longer present in current script)
 **Type:** Cleanup
 
 **What Changed:**
@@ -215,17 +250,17 @@ This document tracks all changes made to streamline the script for Kandji deploy
 ---
 
 ### **⚡ 2026-02-10: Added Pre-Validation Optimization**
-**Lines Affected:** 154-258
+**Lines Affected:** 195-295
 **Type:** Performance Enhancement
 
 **What Changed:**
-1. **confirmPolicyExecution()** (Lines 154-189)
+1. **confirmPolicyExecution()** (Lines 195-230)
    - Checks if validation path already exists locally
    - Sets `alreadyInstalled="true"` flag if found
    - Skips Kandji library item execution for existing items
    - Saves API calls and execution time
 
-2. **validatePolicyResult()** (Lines 197-258)
+2. **validatePolicyResult()** (Lines 238-295)
    - Checks `alreadyInstalled` flag first
    - Marks items as "Already Installed" if skipped
    - Validates absolute paths with -d (directory) and -f (file) checks
@@ -240,23 +275,23 @@ This document tracks all changes made to streamline the script for Kandji deploy
 ---
 
 ### **🔧 2026-02-10: Restored Missing Critical Functions**
-**Lines Affected:** 66-147
+**Lines Affected:** 65-187
 **Type:** Bug Fix
 
 **Functions Added:**
-1. **updateScriptLog()** - Lines 66-68
-2. **runAsUser()** - Lines 76-80 (executes commands as logged-in user)
-3. **get_json_value()** - Lines 88-92 (JSON parsing with JavaScript)
-4. **dialogUpdateSetupYourMac()** - Lines 100-102
-5. **dialogUpdateWelcome()** - Lines 110-112
-6. **finalise()** - Lines 120-147 (completion handler)
+1. **updateScriptLog()** - Lines 65-67
+2. **runAsUser()** - Lines 76-79 (executes commands as logged-in user)
+3. **get_json_value()** - Lines 86-90 (JSON parsing with JavaScript)
+4. **dialogUpdateSetupYourMac()** - Lines 98-100
+5. **dialogUpdateWelcome()** - Lines 108-110
+6. **finalise()** - Lines 161-187 (completion handler)
 
 **❓ Reason:** Mass cleanup accidentally removed these critical functions causing "command not found" errors
 
 ---
 
 ### **🔗 2026-02-10: Consolidated Rosetta Duplicate Triggers**
-**Lines Affected:** 765-776 (policyJSON)
+**Lines Affected:** 677-684 (policyJSON)
 **Type:** Cleanup
 
 **What Changed:**
@@ -272,7 +307,7 @@ This document tracks all changes made to streamline the script for Kandji deploy
 ---
 
 ### **🐛 2026-02-10: Changed Default Debug Mode**
-**Lines Affected:** Line 27
+**Lines Affected:** Line 24
 **Type:** Configuration Change
 
 **What Changed:**
@@ -285,57 +320,56 @@ This document tracks all changes made to streamline the script for Kandji deploy
 
 ---
 
-## 📋 CURRENT KEY LINE NUMBERS (as of 2026-02-11, Script: 909 lines)
+## 📋 CURRENT KEY LINE NUMBERS (as of 2026-02-14, Script: 997 lines)
 
 ### **📦 Variable Declarations:**
-- **Line 20:** Script version and Kandji script parameters
-- **Line 27:** debugMode (default: "false")
-- **Line 28:** welcomeDialog (default: "false")
-- **Line 44-50:** OS version and logged-in user detection
-- **Line 534:** kandjiBinary path: /usr/local/bin/kandji
-- **Line 531-534:** Command file creation with chmod 644
+- **Lines 18-28:** Script version and Kandji script parameters
+- **Line 24:** debugMode (default: "false")
+- **Line 25:** welcomeDialog (default: "false")
+- **Lines 37-41:** OS version and logged-in user detection
+- **Line 586:** kandjiBinary path: /usr/local/bin/kandji
+- **Lines 584-594:** Command file creation with chmod 644
 
 ### **✈️ Pre-flight Checks:**
-- **Lines 265-272:** Root user check
-- **Lines 283-295:** Kandji MDM pre-flight check (echoes error if not found)
-- **Lines 300-305:** Setup Assistant wait loop
-- **Lines 309-314:** Dock/Finder ready check
-- **Lines 318-372:** OS version validation
-- **Lines 377-402:** Caffeinate process
-- **Lines 407-418:** Logged-in user validation
-- **Lines 423-436:** Kandji agent disable
-- **Lines 442-532:** swiftDialog installation with 3-attempt retry logic
+- **Lines 309-315:** Root user check
+- **Lines 320-332:** Kandji MDM pre-flight check (echoes error if not found)
+- **Lines 340-345:** Setup Assistant wait loop
+- **Lines 353-358:** Dock/Finder ready check
+- **Lines 366-405:** OS version validation
+- **Lines 413-414:** Caffeinate process
+- **Lines 422-428:** Logged-in user validation
+- **Lines 433-437:** Kandji agent enabled (no bootout)
+- **Lines 445-541:** swiftDialog installation with 3-attempt retry logic
 
 ### **⚙️ Critical Functions:**
-- **Lines 66-68:** updateScriptLog()
-- **Lines 76-80:** runAsUser()
-- **Lines 88-92:** get_json_value()
-- **Lines 100-102:** dialogUpdateSetupYourMac()
-- **Lines 110-112:** dialogUpdateWelcome()
-- **Lines 120-147:** finalise()
-- **Lines 154-189:** confirmPolicyExecution() (with pre-validation)
-- **Lines 197-258:** validatePolicyResult() (with pre-validation check)
-- **Lines 806-824:** killProcess()
-- **Lines 825-868:** completionAction() (restart only)
-- **Lines 876-909:** quitScript()
+- **Lines 65-67:** updateScriptLog()
+- **Lines 76-79:** runAsUser()
+- **Lines 86-90:** get_json_value()
+- **Lines 98-100:** dialogUpdateSetupYourMac()
+- **Lines 108-110:** dialogUpdateWelcome()
+- **Lines 161-187:** finalise()
+- **Lines 195-230:** confirmPolicyExecution() (with pre-validation)
+- **Lines 238-295:** validatePolicyResult() (with pre-validation check)
+- **Lines 710-722:** killProcess()
+- **Lines 730-749:** completionAction() (restart only)
+- **Lines 757-801:** quitScript()
 
 ### **💬 Dialog Configuration:**
-- **Lines 544-562:** Dialog infobox variables
-- **Lines 569-582:** Setup Your Mac dialog title, message, banner, help
-- **Lines 594-617:** dialogSetupYourMacCMD
-- **Lines 627:** setupYourMacPolicyArrayIconPrefixUrl
+- **Lines 559-563:** Dialog infobox variables
+- **Lines 603-607:** Setup Your Mac dialog title, message, banner, help
+- **Lines 629-651:** dialogSetupYourMacCMD
+- **Line 660:** setupYourMacPolicyArrayIconPrefixUrl
 
 ### **📋 PolicyJSON Configuration:**
-- **Lines 635-675:** policyJSONConfiguration() function
-- **Lines 641-653:** Rosetta library item (absolute path: /Library/Apple/usr/libexec/oah)
-- **Lines 654-664:** Computer Inventory item
+- **Lines 669-702:** policyJSONConfiguration() function
+- **Lines 677-684:** Rosetta library item (absolute path: /Library/Apple/usr/libexec/oah)
+- **Lines 687-695:** Computer Inventory item
 
 ### **🔀 Main Program Logic:**
-- **Lines 736-741:** Commented Kandji agent re-enable code (kept for documentation)
-- **Lines 842-861:** Debug mode blurscreen→moveable replacement
-- **Lines 863-880:** Auto-populate for developer mode
-- **Lines 886-897:** Direct launch to Setup Your Mac dialog (no welcome dialog)
-- **Lines 902-909:** Main installation loop (iterates through policyJSON)
+- **Lines 816-818:** Debug mode blurscreen→moveable replacement
+- **Lines 827-849:** Auto-populate for developer mode
+- **Lines 872-903:** Direct launch to Setup Your Mac dialog (no welcome dialog)
+- **Lines 917-978:** Main installation loop (iterates through policyJSON)
 
 ---
 
@@ -358,7 +392,7 @@ This document tracks all changes made to streamline the script for Kandji deploy
 ## 🚧 PENDING ITEMS (User Action Required)
 
 ### **1️⃣ Populate policyJSON with 10 Developer Tools**
-**📍 Current Location:** Lines 635-675
+**📍 Current Location:** Lines 669-702
 **📝 What's Needed:**
 - Replace "ROSETTA-LIBRARY-ITEM-ID" with actual Kandji Library Item ID
 - Add 8 more library items (total 10)
@@ -381,11 +415,11 @@ This document tracks all changes made to streamline the script for Kandji deploy
 ```
 
 ### **2️⃣ Update Support Contact Information**
-**📍 Current Location:** Lines 569-582
+**📍 Current Location:** Lines 603-607
 **📝 What's Needed:**
-- Line ~570: Update telephone number (currently: +1 (801) 555-1212)
-- Line ~571: Update email address (currently: support@domain.org)
-- Line ~572: Update knowledge base article (currently: KB0057050)
+- Line 607: Update telephone number (currently: +1 (801) 555-1212)
+- Line 607: Update email address (currently: support@domain.org)
+- Line 607: Update knowledge base article (currently: KB0057050)
 
 ### **3️⃣ Optional: Add Rosetta Pre-flight Installation**
 **📊 Current Status:** Rosetta only in policyJSON, not in pre-flight checks
