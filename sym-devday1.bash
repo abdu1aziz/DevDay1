@@ -431,20 +431,10 @@ fi
 
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
-# Pre-flight Check: Temporarily disable Kandji agent check-in
+# Pre-flight Check: Keep Kandji agent enabled (required for library installs)
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-if [[ "${debugMode}" == "true" ]] || [[ "${debugMode}" == "verbose" ]] ; then
-    updateScriptLog "Pre-flight Check: DEBUG MODE: Normally, Kandji agent check-in would be temporarily disabled"
-else
-    updateScriptLog "Pre-flight Check: Temporarily disable Kandji agent check-in"
-    kandjilaunchDaemon="/Library/LaunchDaemons/io.kandji.kandji-agent.plist"
-    if [[ -f "${kandjilaunchDaemon}" ]] ; then
-        /bin/launchctl bootout system "$kandjilaunchDaemon"
-    else
-        updateScriptLog "Pre-flight Check: Kandji agent launch daemon not found at ${kandjilaunchDaemon}, skipping disable"
-    fi
-fi
+updateScriptLog "Pre-flight Check: Kandji agent remains enabled to allow 'kandji library --item' installs"
 
 
 
@@ -774,14 +764,6 @@ function quitScript() {
     # Stop `caffeinate` process
     updateScriptLog "QUIT SCRIPT: De-caffeinate …"
     killProcess "caffeinate"
-
-    # Reenable Kandji agent check-in
-    # Purposely commented-out; presumes Mac will be rebooted
-    # updateScriptLog "QUIT SCRIPT: Reenable Kandji agent check-in"
-    # Reboot would auto reenable Kandji agent check-in, so this is not needed for now:
-    # if [[ -f "${kandjilaunchDaemon}" ]]; then
-    #     launchctl bootstrap system "${kandjilaunchDaemon}"
-    # fi
 
     # Remove welcomeCommandFile
     if [[ -e ${welcomeCommandFile} ]]; then
